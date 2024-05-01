@@ -69,7 +69,7 @@ class Trainer:
 
     def get_train_dataset(self, train_dir, **kw):
         dataset = None
-        if self.local_rank == 0:
+        if dist.get_rank() == 0:
             dataset = datasets.MNIST(
                 train_dir,
                 train=True,
@@ -80,7 +80,7 @@ class Trainer:
             )
 
         dist.barrier()  # prevent other ranks from accessing the data early
-        if self.local_rank != 0:
+        if dist.get_rank() != 0:
             dataset = datasets.MNIST(
                 train_dir,
                 train=True,
