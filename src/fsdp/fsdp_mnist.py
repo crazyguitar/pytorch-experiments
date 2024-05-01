@@ -9,11 +9,7 @@ import torch.distributed as dist
 
 from torch.utils.data.distributed import DistributedSampler
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-from torch.distributed.fsdp.wrap import (
-    size_based_auto_wrap_policy,
-    enable_wrap,
-    wrap,
-)
+from torch.distributed.fsdp.wrap import size_based_auto_wrap_policy
 from torchvision import datasets, transforms
 from torchvision.datasets import MNIST
 
@@ -179,7 +175,7 @@ class Trainer:
 
 
 if __name__ == "__main__":
-    # torchrun --standalone --nproc_per_nod=8 mnist.py
+    # torchrun --standalone --nproc_per_nod=8 fsdp_mnist.py
     p = argparse.ArgumentParser()
     p.add_argument("--lr", type=float, default=0.01, help="learning rate")
     p.add_argument("--batch-size", type=int, default=64, help="batch size")
