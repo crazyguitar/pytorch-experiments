@@ -6,6 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import torch.distributed as dist
+from torch.distributed.fsdp import StateDictType
 
 from torch.utils.data.distributed import DistributedSampler
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
@@ -16,6 +17,10 @@ from torchvision.datasets import MNIST
 
 MNIST_URL = "https://sagemaker-example-files-prod-us-east-1.s3.amazonaws.com/datasets/image/MNIST/"
 MNIST.mirrors = [MNIST_URL]
+
+
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
 class Net(nn.Module):
@@ -158,6 +163,7 @@ class Trainer:
             self.model.train()
             self.run_epoch(epoch)
             self.test()
+            self.dump_shared_state_dict()
 
     def test(self):
         self.model.eval()
@@ -172,6 +178,15 @@ class Trainer:
             loss = ddp_loss[0] / ddp_loss[2]
             accuracy = 100.0 * ddp_loss[1] / ddp_loss[2]
             print(f"Test Average Loss: {loss:.4f}, Accuracy: {accuracy}")
+
+    def dump_shared_state_dict(self):
+        if dist.get_rank() == 0:
+            print(f"FSDP model parameters: {count_parameters(self.model)}")
+        with FSDP.state_dict_type(self.model, StateDictType.SHARDED_STATE_DICT):
+            state_dict = self.model.state_dict()
+            for k, p in state_dict.items():
+                if dist.get_rank() == 0:
+                    print(f"rank: {dist.get_rank()} key: {k} size: {p.size()}")
 
 
 if __name__ == "__main__":
