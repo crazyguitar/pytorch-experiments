@@ -187,7 +187,8 @@ class Trainer:
             for k, p in state_dict.items():
                 # p is a ShardedTensor
                 # reference: https://github.com/pytorch/pytorch/blob/main/torch/distributed/_shard/sharded_tensor/api.py
-                print(f"rank: {dist.get_rank()} key: {k} param: {p.metadata()}")
+                if dist.get_rank() == 0:
+                    print(f"rank: {dist.get_rank()} key: {k} size: {p.size()} tensor: {p.local_tensor().size()}")
 
 
 if __name__ == "__main__":
