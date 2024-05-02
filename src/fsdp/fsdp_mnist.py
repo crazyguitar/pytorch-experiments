@@ -185,8 +185,9 @@ class Trainer:
         with FSDP.state_dict_type(self.model, StateDictType.SHARDED_STATE_DICT):
             state_dict = self.model.state_dict()
             for k, p in state_dict.items():
-                if dist.get_rank() == 0:
-                    print(f"rank: {dist.get_rank()} key: {k} size: {p.size()}")
+                # p is a ShardedTensor
+                # reference: https://github.com/pytorch/pytorch/blob/main/torch/distributed/_shard/sharded_tensor/api.py
+                print(f"rank: {dist.get_rank()} key: {k} param: {p.metadata()}")
 
 
 if __name__ == "__main__":
