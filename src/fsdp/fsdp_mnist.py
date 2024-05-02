@@ -168,6 +168,7 @@ class Trainer:
             self.test()
             self.dump_shared_state_dict()
             self.dump_full_state_dict()
+            self.dump_local_state_dict()
 
     def test(self):
         self.model.eval()
@@ -189,7 +190,6 @@ class Trainer:
             if dist.get_rank() == 0:
                 for k, p in state_dict.items():
                     # p is a ShardedTensor
-                    # reference: https://github.com/pytorch/pytorch/blob/main/torch/distributed/_shard/sharded_tensor/api.py
                     print(f"===> shard state rank: {dist.get_rank()} key: {k} param size: {p.size()} shared param size: {p.local_tensor().size()}")
 
     def dump_full_state_dict(self):
@@ -203,6 +203,17 @@ class Trainer:
                 for k, p in state_dict.items():
                     # p is a Tensor
                     print(f"===> full state: rank: {dist.get_rank()} key: {k} param size: {p.size()}")
+
+    def dump_local_state_dict(self):
+        with FSDP.state_dict_type(self.model, StateDictType.LOCAL_STATE_DICT):
+            state_dict = self.model.state_dict()
+            if dist.get_rank() == 0:
+                total_params = 0
+                for k, p in state_dict.items():
+                    # p is a ShardedTensor
+                    print(f"===> local state rank: {dist.get_rank()} key: {k} param size: {p.size()} shared param size: {p.local_tensor().size()}")
+                    total_params += len(p.local_tensor())
+                print(f"===> local total params == num fsdp shard params: ({total_params}, {count_parameters(self.model)})")
 
 
 if __name__ == "__main__":
