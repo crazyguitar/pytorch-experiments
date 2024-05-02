@@ -10,6 +10,7 @@ from torch.distributed.fsdp import StateDictType
 
 from torch.utils.data.distributed import DistributedSampler
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.distributed.fsdp.api import FullStateDictConfig
 from torch.distributed.fsdp.wrap import size_based_auto_wrap_policy
 from torchvision import datasets, transforms
 from torchvision.datasets import MNIST
@@ -61,6 +62,8 @@ class Trainer:
         self.optimizer = optim.SGD(
             self.model.parameters(), lr=self.lr, momentum=self.momentum
         )
+        if dist.get_rank() == 0:
+            print(f"FSDP model parameters: {count_parameters(self.model)}")
 
         if dist.get_rank() == 0:
             print(self.model)
@@ -164,6 +167,7 @@ class Trainer:
             self.run_epoch(epoch)
             self.test()
             self.dump_shared_state_dict()
+            self.dump_full_state_dict()
 
     def test(self):
         self.model.eval()
@@ -180,15 +184,25 @@ class Trainer:
             print(f"Test Average Loss: {loss:.4f}, Accuracy: {accuracy}")
 
     def dump_shared_state_dict(self):
-        if dist.get_rank() == 0:
-            print(f"FSDP model parameters: {count_parameters(self.model)}")
         with FSDP.state_dict_type(self.model, StateDictType.SHARDED_STATE_DICT):
             state_dict = self.model.state_dict()
-            for k, p in state_dict.items():
-                # p is a ShardedTensor
-                # reference: https://github.com/pytorch/pytorch/blob/main/torch/distributed/_shard/sharded_tensor/api.py
-                if dist.get_rank() == 0:
-                    print(f"rank: {dist.get_rank()} key: {k} size: {p.size()} tensor: {p.local_tensor().size()}")
+            if dist.get_rank() == 0:
+                for k, p in state_dict.items():
+                    # p is a ShardedTensor
+                    # reference: https://github.com/pytorch/pytorch/blob/main/torch/distributed/_shard/sharded_tensor/api.py
+                    print(f"===> shard state rank: {dist.get_rank()} key: {k} param size: {p.size()} shared param size: {p.local_tensor().size()}")
+
+    def dump_full_state_dict(self):
+        with FSDP.state_dict_type(
+            self.model,
+            StateDictType.FULL_STATE_DICT,
+            FullStateDictConfig(rank0_only=True),
+        ):
+            state_dict = self.model.state_dict()
+            if dist.get_rank() == 0:
+                for k, p in state_dict.items():
+                    # p is a Tensor
+                    print(f"===> full state: rank: {dist.get_rank()} key: {k} param size: {p.size()}")
 
 
 if __name__ == "__main__":
