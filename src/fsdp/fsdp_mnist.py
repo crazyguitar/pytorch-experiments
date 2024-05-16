@@ -24,10 +24,16 @@ def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
-def forward_pre_hook(model, inp):
+def forward_pre_hook(model, input):
     if dist.get_rank() == 0:
         n = count_parameters(model)
-        print(f"==> pre hook model: {model}, parameters: {n}")
+        print(f"==> forward pre hook model: {model}")
+
+
+def forward_hook(model, input, output):
+    if dist.get_rank() == 0:
+        n = count_parameters(model)
+        print(f"==> forward hook model: {model}")
 
 
 class Net(nn.Module):
@@ -69,6 +75,7 @@ class Trainer:
             self.model.parameters(), lr=self.lr, momentum=self.momentum
         )
         self.model.register_forward_pre_hook(forward_pre_hook)
+        self.model.register_forward_hook(forward_hook)
         if dist.get_rank() == 0:
             print(f"FSDP model parameters: {count_parameters(self.model)}")
             print(self.model)
