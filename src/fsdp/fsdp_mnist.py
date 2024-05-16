@@ -64,8 +64,6 @@ class Trainer:
         )
         if dist.get_rank() == 0:
             print(f"FSDP model parameters: {count_parameters(self.model)}")
-
-        if dist.get_rank() == 0:
             print(self.model)
 
     def setup_model(self, device):
