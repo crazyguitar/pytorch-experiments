@@ -24,6 +24,12 @@ def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
+def forward_pre_hook(model, inp):
+    if dist.get_rank() == 0:
+        n = count_parameters(model)
+        print(f"==> pre hook model: {model}, parameters: {n}")
+
+
 class Net(nn.Module):
     def __init__(self):
         super(Net, self).__init__()
@@ -62,12 +68,17 @@ class Trainer:
         self.optimizer = optim.SGD(
             self.model.parameters(), lr=self.lr, momentum=self.momentum
         )
+        self.model.register_forward_pre_hook(forward_pre_hook)
         if dist.get_rank() == 0:
             print(f"FSDP model parameters: {count_parameters(self.model)}")
             print(self.model)
 
     def setup_model(self, device):
         model = Net().to(device)
+        if dist.get_rank() == 0:
+            print(f"Original model parameters: {count_parameters(model)}")
+            print(model)
+
         auto_wrap_policy = functools.partial(
             size_based_auto_wrap_policy, min_num_params=100
         )
