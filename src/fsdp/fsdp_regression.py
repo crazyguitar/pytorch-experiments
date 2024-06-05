@@ -92,7 +92,7 @@ class Trainer:
 
     def train(self):
         self.model.train()
-        for epoch in range(1, self.epochs + 1):
+        for epoch in range(0, self.epochs + 1):
             self.run_epoch(epoch)
             self.validate(epoch)
             if epoch % 50 == 0:
