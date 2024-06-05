@@ -4,6 +4,8 @@ import numpy as np
 
 from sklearn import datasets
 from sklearn.model_selection import train_test_split
+from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data.distributed import DistributedSampler
 
 
 def plot(model, x, y, x_test):
@@ -29,11 +31,22 @@ class LinearRegression(nn.Module):
 
 
 class Trainer:
-    def __init__(self, x, y, x_test, y_test, epochs=299, device="cuda"):
-        self.x = x.to(device)
-        self.y = y.to(device)
-        self.x_test = x_test.to(device)
-        self.y_test = y_test.to(device)
+    def __init__(self, x, y, x_test, y_test, epochs=999, device="cuda"):
+        self.train_dataset = TensorDataset(x, y)
+        self.test_dataset = TensorDataset(x_test, y_test)
+        self.train_dataloader = torch.utils.data.DataLoader(
+            self.train_dataset,
+            batch_size=599,
+            shuffle=False,
+            #sampler=DistributedSampler(self.train_dataset),
+        )
+
+        self.test_dataloader = torch.utils.data.DataLoader(
+            self.test_dataset,
+            batch_size=599,
+            shuffle=True,
+        )
+
         self.device = device
 
         n_samples, n_features = x.shape
@@ -46,30 +59,49 @@ class Trainer:
         self.loss = nn.MSELoss()
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=self.lr)
 
+    def run_batch(self, data, target):
+        self.optimizer.zero_grad()
+        output = self.model(data)
+        loss = self.loss(output, target)
+        loss.backward()
+        self.optimizer.step()
+        return loss
+
+    def run_epoch(self, epoch):
+        total_loss = torch.zeros(2).to(self.device)
+        for data, target in self.train_dataloader:
+            data = data.to(self.device)
+            target = target.to(self.device)
+            loss = self.run_batch(data, target)
+            total_loss[0] += loss.item()
+            total_loss[1] += len(data)
+
+        if epoch % 50 == 0:
+            print(f"epoch: {epoch}, loss: {total_loss[0] / total_loss[1]}")
+
     def train(self):
         self.model.train()
         for epoch in range(1, self.epochs + 1):
-            self.optimizer.zero_grad()
-            output = self.model(self.x)
-            loss = self.loss(output, self.y)
-            loss.backward()
-            self.optimizer.step()
+            self.run_epoch(epoch)
+            self.validate(epoch)
 
-    def validate(self):
+    def validate(self, epoch):
         self.model.eval()
+        accuracy = torch.zeros(2).to(self.device)
         with torch.no_grad():
-            output = self.model(self.x_test)
-            accuracy = (output - self.y_test).sum().abs() / float(y_test.shape[0])
-            print(f"accuracy {accuracy}")
+            for data, target in self.test_dataloader:
+                data = data.to(self.device)
+                target = target.to(self.device)
+                output = self.model(data)
+                accuracy[0] += (output - target).sum().abs()
+                accuracy[1] += float(target.shape[0])
 
-    def run(self):
-        self.train()
-        self.validate()
-        if self.device != "cpu":
-            plot(self.model, self.x, self.y, self.x_test)
+        if epoch % 50 == 0:
+            print(f"accuracy {accuracy[0].item() / accuracy[1]}")
 
 
 if __name__ == "__main__":
+    device = "cuda"
     x, y = datasets.make_regression(
         n_samples=50000, n_features=9999, noise=20, random_state=1
     )
@@ -78,14 +110,16 @@ if __name__ == "__main__":
         x, y, test_size=0.2, random_state=78
     )
 
-    x = torch.from_numpy(x.astype(np.float32))
-    y = torch.from_numpy(y.astype(np.float32))
-    y = y.view(y.shape[0], 1)
+    x = torch.from_numpy(x.astype(np.float32)).to(device)
+    y = torch.from_numpy(y.astype(np.float32)).to(device)
+    y = y.view(y.shape[0], 1).to(device)
 
-    x_test = torch.from_numpy(x_test.astype(np.float32))
-    y_test = torch.from_numpy(y_test.astype(np.float32))
-    y_test = y_test.view(y_test.shape[0], 1)
+    x_test = torch.from_numpy(x_test.astype(np.float32)).to(device)
+    y_test = torch.from_numpy(y_test.astype(np.float32)).to(device)
+    y_test = y_test.view(y_test.shape[0], 1).to(device)
 
     print("===== start =====")
-    trainer = Trainer(x, y, x_test, y_test)
-    trainer.run()
+    epochs = 1000
+    trainer = Trainer(x, y, x_test, y_test, epochs=epochs, device=device)
+    trainer.train()
+    # plot(trainer.model, x, y, x_test)
