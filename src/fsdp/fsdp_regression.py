@@ -29,11 +29,12 @@ class LinearRegression(nn.Module):
 
 
 class Trainer:
-    def __init__(self, x, y, x_test, y_test, epochs=299):
-        self.x = x
-        self.y = y
-        self.x_test = x_test
-        self.y_test = y_test
+    def __init__(self, x, y, x_test, y_test, epochs=299, device="cuda"):
+        self.x = x.to(device)
+        self.y = y.to(device)
+        self.x_test = x_test.to(device)
+        self.y_test = y_test.to(device)
+        self.device = device
 
         n_samples, n_features = x.shape
         self.n_samples = n_samples
@@ -41,7 +42,7 @@ class Trainer:
         self.lr = 0.01
         self.epochs = epochs
 
-        self.model = LinearRegression(n_features, 1)
+        self.model = LinearRegression(n_features, 1).to(device)
         self.loss = nn.MSELoss()
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=self.lr)
 
@@ -58,13 +59,14 @@ class Trainer:
         self.model.eval()
         with torch.no_grad():
             output = self.model(self.x_test)
-            accuracy = (output - y_test).sum().abs() / float(y_test.shape[0])
+            accuracy = (output - self.y_test).sum().abs() / float(y_test.shape[0])
             print(f"accuracy {accuracy}")
 
     def run(self):
         self.train()
         self.validate()
-        plot(self.model, self.x, self.y, self.x_test)
+        if self.device != "cpu":
+            plot(self.model, self.x, self.y, self.x_test)
 
 
 if __name__ == "__main__":
@@ -84,5 +86,6 @@ if __name__ == "__main__":
     y_test = torch.from_numpy(y_test.astype(np.float32))
     y_test = y_test.view(y_test.shape[0], 1)
 
+    print("===== start =====")
     trainer = Trainer(x, y, x_test, y_test)
     trainer.run()
