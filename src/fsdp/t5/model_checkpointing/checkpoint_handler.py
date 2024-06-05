@@ -65,7 +65,7 @@ def load_model_sharded(model, rank, cfg, verbose=True):
         if rank == 0:
             ck = checkpoint.keys()
             print(f" checkpoint key len = {len(ck)} and \n keys =  {ck}")
-      
+
         dist_cp.load_state_dict(
             state_dict=checkpoint,
             storage_reader=reader,
@@ -108,7 +108,7 @@ def save_model_and_optimizer_sharded(model, rank, cfg,optim=None, verbose=True):
             state_dict=state_dict,
             storage_writer=distributed_writer,
             planner=DefaultSavePlanner(),
-            
+
         )
     dist.barrier()
     t1 = time.perf_counter()
@@ -117,7 +117,7 @@ def save_model_and_optimizer_sharded(model, rank, cfg,optim=None, verbose=True):
         print(
             f"Checkpoint Time = {t1-t0:.4f}\n using {cfg.save_using_num_threads=} total threads"
         )
-        
+
 def save_model_checkpoint(
     model,
     optimizer,
@@ -138,7 +138,7 @@ def save_model_checkpoint(
 
     if cfg.verbose:
         print(f"saving process: rank {rank}  done w model state_dict\n")
-   
+
 
     if rank == 0:
         print(f"--> saving model ...")
@@ -153,7 +153,7 @@ def save_model_checkpoint(
 
         if cfg.verbose:
             print(f"model checkpoint saved for epoch {epoch} at {save_full_path}\n")
-      
+
 
 
 def load_model_checkpoint(model, rank, cfg, verbose=True):
@@ -299,7 +299,7 @@ def save_distributed_model_checkpoint(model, rank, cfg, epoch=1):
             StateDictType.LOCAL_STATE_DICT,
         ):
             state_dict = model.state_dict()
-       
+
 
         # write out distributed checkpoint
         save_state_dict(state_dict, writer)

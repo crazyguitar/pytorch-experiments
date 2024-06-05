@@ -13,7 +13,7 @@ class train_config:
     gamma: float= 0.85
     use_fp16: bool=False
     mixed_precision: bool=True
-    save_model: bool=False
-    
-    
-    
+    save_model: bool=True
+
+
+
