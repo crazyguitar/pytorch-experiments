@@ -11,7 +11,7 @@ import torch.distributed.checkpoint as dcp
 from pathlib import Path
 from sklearn import datasets
 from sklearn.model_selection import train_test_split
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import TensorDataset
 from torch.utils.data.distributed import DistributedSampler
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp.wrap import size_based_auto_wrap_policy
