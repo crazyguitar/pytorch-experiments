@@ -1,17 +1,22 @@
 import os
+import shutil
 import functools
 import torch
 import torch.nn as nn
 import numpy as np
 import torch.distributed as dist
 import torch.multiprocessing as mp
+import torch.distributed.checkpoint as dcp
 
+from pathlib import Path
 from sklearn import datasets
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, TensorDataset
 from torch.utils.data.distributed import DistributedSampler
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp.wrap import size_based_auto_wrap_policy
+from torch.distributed.fsdp.fully_sharded_data_parallel import StateDictType
+from torch.distributed.checkpoint.optimizer import load_sharded_optimizer_state_dict
 
 
 def print_0(*a, **kw):
@@ -43,6 +48,7 @@ class LinearRegression(nn.Module):
 
 class Trainer:
     def __init__(self, x, y, x_test, y_test, rank, epochs=999):
+        self.checkpoint_dir = Path(__file__).parent / "checkpoints"
         self.train_dataset = TensorDataset(x, y)
         self.test_dataset = TensorDataset(x_test, y_test)
         self.train_dataloader = torch.utils.data.DataLoader(
@@ -73,6 +79,8 @@ class Trainer:
         )
         self.loss = nn.MSELoss()
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=self.lr)
+        self.load()
+        print_0(self.model)
 
     def run_batch(self, data, target):
         self.optimizer.zero_grad()
@@ -100,21 +108,60 @@ class Trainer:
         for epoch in range(1, self.epochs + 1):
             self.run_epoch(epoch)
             self.validate(epoch)
+            if epoch % 50 == 0:
+                self.save()
 
     def validate(self, epoch):
         self.model.eval()
-        accuracy = torch.zeros(2).to(self.rank)
+        error = torch.zeros(2).to(self.rank)
         with torch.no_grad():
             for data, target in self.test_dataloader:
                 data = data.to(self.rank)
                 target = target.to(self.rank)
                 output = self.model(data)
-                accuracy[0] += (output - target).sum().abs()
-                accuracy[1] += float(target.shape[0])
+                error[0] += (output - target).sum().abs()
+                error[1] += float(target.shape[0])
 
-        dist.all_reduce(accuracy, op=dist.ReduceOp.SUM)
+        dist.all_reduce(error, op=dist.ReduceOp.SUM)
         if epoch % 50 == 0:
-            print_0(f"accuracy {accuracy[0].item() / accuracy[1]}")
+            print_0(f"error {error[0].item() / error[1]}")
+
+    def save(self):
+        shutil.rmtree(self.checkpoint_dir, ignore_errors=True)
+        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        with FSDP.state_dict_type(self.model, StateDictType.SHARDED_STATE_DICT):
+            model_state_dict = self.model.state_dict()
+            optim_state_dict = FSDP.optim_state_dict(self.model, self.optimizer)
+            state_dict = {
+                "model": model_state_dict,
+                "optim": optim_state_dict,
+            }
+            dcp.save(state_dict, checkpoint_id=str(self.checkpoint_dir))
+            print_0("==> save checkpoint success")
+
+    def load(self):
+        if not self.checkpoint_dir.exists():
+            return
+
+        with FSDP.state_dict_type(self.model, StateDictType.SHARDED_STATE_DICT):
+            model_state_dict = self.model.state_dict()
+            state_dict = {"model": model_state_dict}
+            dcp.load(
+                state_dict=state_dict,
+                checkpoint_id=self.checkpoint_dir,
+            )
+            self.model.load_state_dict(state_dict["model"])
+            optim_state = load_sharded_optimizer_state_dict(
+                model_state_dict=state_dict["model"],
+                optimizer_key="optim",
+                storage_reader=dcp.FileSystemReader(self.checkpoint_dir),
+                planner=dcp.DefaultLoadPlanner(),
+            )
+            flattened_state = FSDP.optim_state_dict_to_load(
+                self.model, self.optimizer, optim_state["optim"]
+            )
+            self.optimizer.load_state_dict(flattened_state)
+            print_0("==> load checkpoint success")
 
 
 def setup(rank, world_size):
@@ -131,12 +178,10 @@ def main(rank, world_size):
     setup(rank, world_size)
 
     x, y = datasets.make_regression(
-        n_samples=50000, n_features=9999, noise=20, random_state=1
+        n_samples=9999, n_features=299, noise=20, random_state=1
     )
 
-    x, x_test, y, y_test = train_test_split(
-        x, y, test_size=0.2, random_state=78
-    )
+    x, x_test, y, y_test = train_test_split(x, y, test_size=0.2, random_state=78)
 
     x = torch.from_numpy(x.astype(np.float32)).to(rank)
     y = torch.from_numpy(y.astype(np.float32)).to(rank)
