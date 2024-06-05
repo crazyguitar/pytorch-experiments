@@ -24,19 +24,6 @@ def print_0(*a, **kw):
         print(*a, **kw)
 
 
-def plot(model, x, y, x_test):
-    import matplotlib.pyplot as plt
-
-    if x.shape[1] != 1:
-        return
-    y_hat = model(x).detach().numpy()
-    y_test_hat = model(x_test).detach().numpy()
-    plt.plot(x.numpy(), y.numpy(), "ro")
-    plt.plot(x.numpy(), y_hat, "b")
-    plt.plot(x_test, y_test_hat, "go")
-    plt.show()
-
-
 class LinearRegression(nn.Module):
     def __init__(self, input_dim, output_dim):
         super(LinearRegression, self).__init__()
