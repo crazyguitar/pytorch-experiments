@@ -71,7 +71,7 @@ class Trainer:
 
 if __name__ == "__main__":
     x, y = datasets.make_regression(
-        n_samples=10000, n_features=1000, noise=20, random_state=1
+        n_samples=50000, n_features=9999, noise=20, random_state=1
     )
 
     x, x_test, y, y_test = train_test_split(
