@@ -5,29 +5,18 @@ import torch
 import torch.nn as nn
 import torch.distributed as dist
 import torch.multiprocessing as mp
+import torch.distributed._shard.sharded_tensor as sharded_tensor
 
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp.wrap import size_based_auto_wrap_policy
 from torch.distributed.fsdp.fully_sharded_data_parallel import StateDictType
 from torch.distributed.checkpoint.default_planner import create_default_local_save_plan
 from torch.distributed._shard.sharded_tensor.metadata import TensorProperties
-from torch.distributed._shard.sharded_tensor import (
-    Shard,
-    ShardedTensor,
-    ShardedTensorMetadata,
-    ShardMetadata,
-)
+from torch.distributed._shard.api import _shard_tensor
 from torch.distributed._shard.sharding_spec import (
     ChunkShardingSpec,
     EnumerableShardingSpec,
     ShardMetadata,
-)
-from torch.distributed._shard.api import (
-    _collect_local_shard,
-    _reshard_output,
-    _shard_tensor,
-    load_with_process_group,
-    shard_parameter,
 )
 
 warnings.filterwarnings("ignore")
@@ -40,15 +29,14 @@ def print_0(*a, **kw):
 
 def to_sharded(tensor, num_shard):
     spec = ChunkShardingSpec(
-        dim=0,
-        placements=[f"rank:{r}/cuda:{r}" for r in range(num_shard)]
+        dim=0, placements=[f"rank:{r}/cuda:{r}" for r in range(num_shard)]
     )
     return _shard_tensor(tensor, spec)
 
 
-def to_tensor(rank, dst, sharded_tensor, h, w):
+def to_tensor(rank, dst, sharded, h, w):
     tensor = torch.zeros(h, w).to(rank) if rank == dst else None
-    sharded_tensor.gather(dst, tensor)
+    sharded.gather(dst, tensor)
     return tensor
 
 
@@ -70,15 +58,27 @@ def setup(rank, world_size):
     torch.cuda.set_device(rank)
 
 
-def test_shard_tensor(rank, world_size):
+def test_sharded_tensor(rank, world_size):
     h = 8
     w = 8
     tensor = torch.rand(h, w).to(rank)
-    sharded_tensor = to_sharded(tensor, world_size)
-    ensumble_tensor = to_tensor(rank, 0, sharded_tensor, h, w)
+    sharded = to_sharded(tensor, world_size)
+    ensumble_tensor = to_tensor(rank, 0, sharded, h, w)
     print_0(f"original tensor: {tensor}")
     print_0(f"ensumble_tensor: {ensumble_tensor}")
-    print(f"[rank:{rank}] local_shards {sharded_tensor.local_shards()}")
+    print(f"[rank:{rank}] local_shards {sharded.local_shards()}")
+
+
+def test_sharded_tensor_rand(rank, world_size):
+    h = 8
+    w = 1
+    spec = ChunkShardingSpec(
+        dim=0, placements=[f"rank:{r}/cuda:{r}" for r in range(world_size)]
+    )
+    sharded = sharded_tensor.rand(spec, (h, w))
+    print(f"[rank:{rank}] {sharded.local_shards()} size: {sharded.size()}")
+    tensor = to_tensor(rank, 0, sharded, h, w)
+    print_0(tensor)
 
 
 def test_local_plan(rank, world_size):
@@ -99,7 +99,8 @@ def test_local_plan(rank, world_size):
 
 def main(rank, world_size):
     setup(rank, world_size)
-    test_shard_tensor(rank, world_size)
+    test_sharded_tensor(rank, world_size)
+    test_sharded_tensor_rand(rank, world_size)
     test_local_plan(rank, world_size)
     dist.destroy_process_group()
 
