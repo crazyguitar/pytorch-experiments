@@ -11,7 +11,7 @@ import torch.multiprocessing as mp
 import torch.distributed as dist
 import torch.nn as nn
 import torch.distributed.checkpoint as dcp
-from typing import Iterable, List, Optional, Tuple, Union
+from typing import Optional, Tuple, Union
 
 from pathlib import Path
 from torch.distributed.fsdp.fully_sharded_data_parallel import StateDictType
@@ -22,7 +22,7 @@ from torch.distributed.checkpoint import (
     DefaultLoadPlanner,
     DefaultSavePlanner,
 )
-from megatron.core.dist_checkpointing import ShardedTensor
+
 from megatron.core.dist_checkpointing.strategies.async_utils import (
     AsyncCallsQueue,
     AsyncRequest,
@@ -62,15 +62,11 @@ from megatron.core.dist_checkpointing.strategies.base import (
     LoadShardedStrategy,
     SaveCommonStrategy,
     SaveShardedStrategy,
-    StrategyAction,
 )
 
 from megatron.core.dist_checkpointing.mapping import (
     CheckpointingException,
     ShardedStateDict,
-    ShardedObject,
-    ShardedTensor,
-    ShardedTensorFactory,
     StateDict,
 )
 
