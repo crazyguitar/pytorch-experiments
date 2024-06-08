@@ -291,7 +291,7 @@ if __name__ == "__main__":
     p.add_argument("--lr", type=float, default=0.01, help="learning rate")
     p.add_argument("--batch-size", type=int, default=64, help="batch size")
     p.add_argument("--test-batch-size", type=int, default=64, help="test batch size")
-    p.add_argument("--epochs", type=int, default=64, help="epochs")
+    p.add_argument("--epochs", type=int, default=128, help="epochs")
     p.add_argument("--momentum", type=float, default=0.5, help="momentum")
     p.add_argument("--data", type=str, default="data", help="data folder")
 
