@@ -153,20 +153,13 @@ class Trainer:
         return loss
 
     def run_epoch(self, epoch):
-        with torch.profiler.profile(
-            schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=1),
-            on_trace_ready=torch.profiler.tensorboard_trace_handler("./log/fsdp_mnist"),
-            record_shapes=True,
-            profile_memory=True,
-            with_stack=True,
-        ):
-            ddp_loss = torch.zeros(2).to(self.device)
-            for i, (data, target) in enumerate(self.train_loader, 1):
-                data = data.to(self.device)
-                target = target.to(self.device)
-                loss = self.run_batch(epoch, i, data, target)
-                ddp_loss[0] += loss.item()
-                ddp_loss[1] += len(data)
+        ddp_loss = torch.zeros(2).to(self.device)
+        for i, (data, target) in enumerate(self.train_loader, 1):
+            data = data.to(self.device)
+            target = target.to(self.device)
+            loss = self.run_batch(epoch, i, data, target)
+            ddp_loss[0] += loss.item()
+            ddp_loss[1] += len(data)
 
         dist.all_reduce(ddp_loss, op=dist.ReduceOp.SUM)
         if dist.get_rank() == 0:
