@@ -350,7 +350,7 @@ class Trainer:
             self.model.train()
             self.run_epoch(epoch)
             self.test()
-            if epoch % 3 == 0:
+            if epoch % 2 == 0:
                 self.save()
 
         self.async_calls.maybe_finalize_async_calls(blocking=True)
