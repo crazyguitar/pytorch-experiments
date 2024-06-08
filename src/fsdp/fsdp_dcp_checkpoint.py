@@ -12,146 +12,23 @@ import torch.distributed as dist
 import torch.distributed.checkpoint as dcp
 
 from pathlib import Path
-from typing import Optional, Tuple, Union
 from torch.distributed.fsdp import StateDictType
 from torch.utils.data.distributed import DistributedSampler
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp.api import FullStateDictConfig
 from torch.distributed.fsdp.wrap import size_based_auto_wrap_policy
-from torch.distributed.checkpoint.optimizer import load_sharded_optimizer_state_dict
+from torch.distributed.checkpoint.optimizer import (
+    load_sharded_optimizer_state_dict,
+)
 from torchvision import datasets, transforms
 from torchvision.datasets import MNIST
 
-from torch.distributed.checkpoint import (
-    DefaultLoadPlanner,
-    DefaultSavePlanner,
-)
-
-from megatron.core.dist_checkpointing.strategies.async_utils import (
-    AsyncCallsQueue,
-    AsyncRequest,
-)
-
-from megatron.core.dist_checkpointing.strategies.torch import (
-    TorchDistSaveShardedStrategy,
-    TorchDistLoadShardedStrategy,
-)
-
-from megatron.core.dist_checkpointing.strategies.filesystem_async import (
-    FileSystemWriterAsync,
-)
-
-from megatron.core.dist_checkpointing.strategies.state_dict_saver import (
-    save_state_dict_async_plan,
-)
-
-from megatron.core.dist_checkpointing.dict_utils import (
-    extract_matching_values,
-    dict_list_map_inplace,
-)
-
-from megatron.core.dist_checkpointing.utils import (
-    extract_nonpersistent,
-)
-
-from megatron.core.dist_checkpointing.core import (
-    CheckpointingConfig,
-    maybe_load_config,
-    save_config,
-)
-
-from megatron.core.dist_checkpointing.strategies.base import (
-    AsyncSaveShardedStrategy,
-    LoadCommonStrategy,
-    LoadShardedStrategy,
-    SaveCommonStrategy,
-    SaveShardedStrategy,
-)
-
-from megatron.core.dist_checkpointing.mapping import (
-    CheckpointingException,
-    ShardedStateDict,
-    StateDict,
-)
 
 logging.getLogger("torch.distributed.fsdp._debug_utils").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore")
 
 MNIST_URL = "https://sagemaker-example-files-prod-us-east-1.s3.amazonaws.com/datasets/image/MNIST/"
 MNIST.mirrors = [MNIST_URL]
-
-
-class PyTorchDistSaveShardedStrategy(TorchDistSaveShardedStrategy):
-    def async_save(
-        self, sharded_state_dict: ShardedStateDict, checkpoint_dir: Path
-    ) -> AsyncRequest:
-        writer = FileSystemWriterAsync(checkpoint_dir, thread_count=self.thread_count)
-        save_state_dict_ret = save_state_dict_async_plan(
-            sharded_state_dict,
-            writer,
-            None,
-            planner=DefaultSavePlanner(),
-        )
-        return self._get_save_and_finalize_callbacks(writer, save_state_dict_ret)
-
-
-class PyTorchDistLoadShardedStrategy(TorchDistLoadShardedStrategy):
-    def load(
-        self, sharded_state_dict: ShardedStateDict, checkpoint_dir: Path
-    ) -> StateDict:
-        dcp.load_state_dict(
-            sharded_state_dict,
-            dcp.FileSystemReader(checkpoint_dir),
-            planner=DefaultLoadPlanner(),
-        )
-        return sharded_state_dict
-
-
-def save(
-    sharded_state_dict: ShardedStateDict,
-    checkpoint_dir: str,
-    sharded_strategy: Union[SaveShardedStrategy, Tuple[str, int], None] = None,
-    common_strategy: Union[SaveCommonStrategy, Tuple[str, int], None] = None,
-    validate_access_integrity: bool = True,
-    async_sharded_save: bool = False,
-) -> Optional[AsyncRequest]:
-
-    checkpoint_dir = Path(checkpoint_dir)
-    sharded_strategy = PyTorchDistSaveShardedStrategy(backend="torch_dist", version=1)
-    _, sharded_state_dict = extract_nonpersistent(sharded_state_dict)
-
-    def metadata_finalize_fn():
-        if torch.distributed.get_rank() == 0:
-            save_config(
-                CheckpointingConfig(sharded_strategy.backend, sharded_strategy.version),
-                checkpoint_dir,
-            )
-        torch.distributed.barrier()
-
-    if not async_sharded_save:
-        sharded_strategy.save(sharded_state_dict, checkpoint_dir)
-        metadata_finalize_fn()
-        return
-
-    if not isinstance(sharded_strategy, AsyncSaveShardedStrategy):
-        raise CheckpointingException(
-            f"Cannot apply async_save to non-async strategy {sharded_strategy}"
-        )
-    async_request = sharded_strategy.async_save(sharded_state_dict, checkpoint_dir)
-    async_request.finalize_fns.append(metadata_finalize_fn)
-    return async_request
-
-
-def load(
-    sharded_state_dict: ShardedStateDict,
-    checkpoint_dir: str,
-    sharded_strategy: Union[LoadShardedStrategy, Tuple[str, int], None] = None,
-    common_strategy: Union[LoadCommonStrategy, Tuple[str, int], None] = None,
-    validate_access_integrity: bool = True,
-) -> StateDict:
-    sharded_strategy = PyTorchDistLoadShardedStrategy()
-    checkpoint_dir = Path(checkpoint_dir)
-    return sharded_strategy.load(sharded_state_dict, checkpoint_dir)
 
 
 def print_0(*a, **kw):
@@ -210,7 +87,7 @@ class Trainer:
             self.model.parameters(), lr=self.lr, momentum=self.momentum
         )
         self.load()
-        self.async_calls = AsyncCallsQueue()
+        self.fut = None
         print_0(self.model)
 
     def setup_model(self, device):
@@ -317,14 +194,11 @@ class Trainer:
 
     def train(self):
         for epoch in range(1, self.epochs + 1):
-            self.async_calls.maybe_finalize_async_calls(blocking=False)
             self.model.train()
             self.run_epoch(epoch)
             self.test()
             if epoch % 3 == 0:
                 self.save()
-
-        self.async_calls.maybe_finalize_async_calls(blocking=True)
 
     def test(self):
         self.model.eval()
@@ -341,14 +215,19 @@ class Trainer:
             print_0(f"Test Average Loss: {loss:.4f}, Accuracy: {accuracy}")
 
     def save(self):
+        if self.fut:
+            self.fut.result()
+            self.fut = None
+
         shutil.rmtree(self.checkpoint_dir, ignore_errors=True)
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         with FSDP.state_dict_type(self.model, StateDictType.SHARDED_STATE_DICT):
             model_state_dict = self.model.state_dict()
             optim_state_dict = FSDP.optim_state_dict(self.model, self.optimizer)
             state_dict = {"model": model_state_dict, "optim": optim_state_dict}
-            request = save(state_dict, self.checkpoint_dir, async_sharded_save=True)
-            self.async_calls.schedule_async_request(request)
+            storage_writer = dcp.FileSystemWriter(str(self.checkpoint_dir))
+            self.fut = dcp.async_save(state_dict, storage_writer=storage_writer)
+            print_0("==> save checkpoint success")
 
     def load(self):
         if not self.checkpoint_dir.exists():
@@ -357,7 +236,10 @@ class Trainer:
         with FSDP.state_dict_type(self.model, StateDictType.SHARDED_STATE_DICT):
             model_state_dict = self.model.state_dict()
             state_dict = {"model": model_state_dict}
-            load(state_dict, self.checkpoint_dir)
+            dcp.load(
+                state_dict=state_dict,
+                storage_reader=dcp.FileSystemReader(self.checkpoint_dir),
+            )
             self.model.load_state_dict(state_dict["model"])
             optim_state = load_sharded_optimizer_state_dict(
                 model_state_dict=state_dict["model"],
@@ -373,7 +255,7 @@ class Trainer:
 
 
 if __name__ == "__main__":
-    # torchrun --standalone --nproc_per_nod=8 fsdp_megatron_checkpoint.py
+    # torchrun --standalone --nproc_per_nod=8 fsdp_mnist.py
     p = argparse.ArgumentParser()
     p.add_argument("--lr", type=float, default=0.01, help="learning rate")
     p.add_argument("--batch-size", type=int, default=64, help="batch size")
@@ -386,7 +268,7 @@ if __name__ == "__main__":
 
     torch.manual_seed(5566)
     args = p.parse_args()
-    dist.init_process_group(backend="nccl")
+    dist.init_process_group(backend="cpu:gloo,cuda:nccl")
     torch.cuda.set_device(local_rank)
     trainer = Trainer(args)
     trainer.train()
