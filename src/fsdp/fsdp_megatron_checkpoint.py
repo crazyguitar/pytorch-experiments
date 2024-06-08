@@ -199,8 +199,8 @@ class Net(nn.Module):
         self.conv2 = nn.Conv2d(32, 64, 3, 1)
         self.dropout1 = nn.Dropout(0.25)
         self.dropout2 = nn.Dropout(0.5)
-        self.fc1 = nn.Linear(9216, 1024)
-        self.fc2 = nn.Linear(1024, 10)
+        self.fc1 = nn.Linear(9216, 4096)
+        self.fc2 = nn.Linear(4096, 10)
 
     def forward(self, x):
         x = self.conv1(x)
@@ -370,8 +370,10 @@ class Trainer:
             print_0(f"Test Average Loss: {loss:.4f}, Accuracy: {accuracy}")
 
     def save(self):
-        shutil.rmtree(self.checkpoint_dir, ignore_errors=True)
-        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        if dist.get_rank() == 0:
+            shutil.rmtree(self.checkpoint_dir, ignore_errors=True)
+            self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
         with FSDP.state_dict_type(self.model, StateDictType.SHARDED_STATE_DICT):
             model_state_dict = self.model.state_dict()
             optim_state_dict = FSDP.optim_state_dict(self.model, self.optimizer)
