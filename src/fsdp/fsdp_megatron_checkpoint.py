@@ -4,6 +4,10 @@ import argparse
 import functools
 import warnings
 import logging
+import numpy
+import time
+import statistics
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -105,6 +109,31 @@ class PyTorchDistLoadShardedStrategy(TorchDistLoadShardedStrategy):
             planner=DefaultLoadPlanner(),
         )
         return sharded_state_dict
+
+
+def compute_stats_of_metric(metric: float, key: str, group=None):
+    """Compute metric stats."""
+    times = [None for _ in range(dist.get_world_size(group))]
+    dist.all_gather_object(times, metric, group=group)
+
+    if dist.get_rank() == 0:
+        print(
+            "===> Time taken (min, max, mean, stddev, median, len) = (",
+            numpy.min(times),
+            ",",
+            numpy.max(times),
+            ",",
+            statistics.mean(times),
+            ",",
+            statistics.stdev(times),
+            ",",
+            statistics.median(times),
+            ",",
+            len(times),
+            ",",
+            key,
+            ")",
+        )
 
 
 def save(
@@ -389,5 +418,9 @@ if __name__ == "__main__":
     dist.init_process_group(backend="nccl")
     torch.cuda.set_device(local_rank)
     trainer = Trainer(args)
+
+    start = time.process_time()
     trainer.train()
+    duration = time.process_time() - start
+    compute_stats_of_metric(duration, "training duration (s)")
     dist.destroy_process_group()
