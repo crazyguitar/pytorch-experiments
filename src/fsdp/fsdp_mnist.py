@@ -170,8 +170,7 @@ class Trainer:
             ddp_loss[1] += len(data)
 
         dist.all_reduce(ddp_loss, op=dist.ReduceOp.SUM)
-        if dist.get_rank() == 0:
-            print(f"Train Epoch: {epoch} Loss: {ddp_loss[0] / ddp_loss[1]}")
+        print_0(f"Train Epoch: {epoch} Loss: {ddp_loss[0] / ddp_loss[1]}")
 
     def run_test(self):
         loss = 0
