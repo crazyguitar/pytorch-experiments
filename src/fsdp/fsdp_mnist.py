@@ -34,6 +34,7 @@ def print_0(*a, **kw):
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
+
 class Net(nn.Module):
     def __init__(self):
         super(Net, self).__init__()
@@ -41,8 +42,8 @@ class Net(nn.Module):
         self.conv2 = nn.Conv2d(32, 64, 3, 1)
         self.dropout1 = nn.Dropout(0.25)
         self.dropout2 = nn.Dropout(0.5)
-        self.fc1 = nn.Linear(9216, 128)
-        self.fc2 = nn.Linear(128, 10)
+        self.fc1 = nn.Linear(9216, 1024)
+        self.fc2 = nn.Linear(1024, 10)
 
     def forward(self, x):
         x = self.conv1(x)
