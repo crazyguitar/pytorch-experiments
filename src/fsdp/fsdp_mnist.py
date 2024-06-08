@@ -1,4 +1,5 @@
 import os
+import shutil
 import argparse
 import functools
 import torch
@@ -6,12 +7,17 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import torch.distributed as dist
-from torch.distributed.fsdp import StateDictType
+import torch.distributed.checkpoint as dcp
 
+from pathlib import Path
+from torch.distributed.fsdp import StateDictType
 from torch.utils.data.distributed import DistributedSampler
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp.api import FullStateDictConfig
 from torch.distributed.fsdp.wrap import size_based_auto_wrap_policy
+from torch.distributed.checkpoint.optimizer import (
+    load_sharded_optimizer_state_dict,
+)
 from torchvision import datasets, transforms
 from torchvision.datasets import MNIST
 
@@ -20,20 +26,13 @@ MNIST_URL = "https://sagemaker-example-files-prod-us-east-1.s3.amazonaws.com/dat
 MNIST.mirrors = [MNIST_URL]
 
 
+def print_0(*a, **kw):
+    if dist.get_rank() == 0:
+        print(*a, **kw)
+
+
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
-
-
-def forward_pre_hook(model, input):
-    if dist.get_rank() == 0:
-        n = count_parameters(model)
-        print(f"==> forward pre hook model: {model}")
-
-
-def forward_hook(model, input, output):
-    if dist.get_rank() == 0:
-        n = count_parameters(model)
-        print(f"==> forward hook model: {model}")
 
 
 class Net(nn.Module):
@@ -57,6 +56,7 @@ class Net(nn.Module):
 
 class Trainer:
     def __init__(self, args):
+        self.checkpoint_dir = Path(__file__).parent / "checkpoints"
         self.epochs = args.epochs
         self.local_rank = int(os.environ["LOCAL_RANK"])
         self.device = torch.device(f"cuda:{self.local_rank}")
@@ -74,18 +74,11 @@ class Trainer:
         self.optimizer = optim.SGD(
             self.model.parameters(), lr=self.lr, momentum=self.momentum
         )
-        self.model.register_forward_pre_hook(forward_pre_hook)
-        self.model.register_forward_hook(forward_hook)
-        if dist.get_rank() == 0:
-            print(f"FSDP model parameters: {count_parameters(self.model)}")
-            print(self.model)
+        self.load()
+        print_0(self.model)
 
     def setup_model(self, device):
         model = Net().to(device)
-        if dist.get_rank() == 0:
-            print(f"Original model parameters: {count_parameters(model)}")
-            print(model)
-
         auto_wrap_policy = functools.partial(
             size_based_auto_wrap_policy, min_num_params=100
         )
@@ -99,7 +92,10 @@ class Trainer:
                 train=True,
                 download=True,
                 transform=transforms.Compose(
-                    [transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))]
+                    [
+                        transforms.ToTensor(),
+                        transforms.Normalize((0.1307,), (0.3081,)),
+                    ]
                 ),
             )
 
@@ -110,7 +106,10 @@ class Trainer:
                 train=True,
                 download=False,
                 transform=transforms.Compose(
-                    [transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))]
+                    [
+                        transforms.ToTensor(),
+                        transforms.Normalize((0.1307,), (0.3081,)),
+                    ]
                 ),
             )
         return dataset
@@ -130,7 +129,10 @@ class Trainer:
             train_dir,
             train=False,
             transform=transforms.Compose(
-                [transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))]
+                [
+                    transforms.ToTensor(),
+                    transforms.Normalize((0.1307,), (0.3081,)),
+                ]
             ),
         )
 
@@ -156,7 +158,7 @@ class Trainer:
             on_trace_ready=torch.profiler.tensorboard_trace_handler("./log/fsdp_mnist"),
             record_shapes=True,
             profile_memory=True,
-            with_stack=True
+            with_stack=True,
         ):
             ddp_loss = torch.zeros(2).to(self.device)
             for i, (data, target) in enumerate(self.train_loader, 1):
@@ -189,9 +191,8 @@ class Trainer:
             self.model.train()
             self.run_epoch(epoch)
             self.test()
-            self.dump_shared_state_dict()
-            self.dump_full_state_dict()
-            self.dump_local_state_dict()
+            if epoch % 3 == 0:
+                self.save()
 
     def test(self):
         self.model.eval()
@@ -205,38 +206,44 @@ class Trainer:
         if dist.get_rank() == 0:
             loss = ddp_loss[0] / ddp_loss[2]
             accuracy = 100.0 * ddp_loss[1] / ddp_loss[2]
-            print(f"Test Average Loss: {loss:.4f}, Accuracy: {accuracy}")
+            print_0(f"Test Average Loss: {loss:.4f}, Accuracy: {accuracy}")
 
-    def dump_shared_state_dict(self):
+    def save(self):
+        shutil.rmtree(self.checkpoint_dir, ignore_errors=True)
+        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         with FSDP.state_dict_type(self.model, StateDictType.SHARDED_STATE_DICT):
-            state_dict = self.model.state_dict()
-            if dist.get_rank() == 0:
-                for k, p in state_dict.items():
-                    # p is a ShardedTensor
-                    print(f"===> shard state rank: {dist.get_rank()} key: {k} param size: {p.size()} shared param size: {p.local_tensor().size()}")
+            model_state_dict = self.model.state_dict()
+            optim_state_dict = FSDP.optim_state_dict(self.model, self.optimizer)
+            state_dict = {
+                "model": model_state_dict,
+                "optim": optim_state_dict,
+            }
+            dcp.save(state_dict, checkpoint_id=str(self.checkpoint_dir))
+            print_0("==> save checkpoint success")
 
-    def dump_full_state_dict(self):
-        with FSDP.state_dict_type(
-            self.model,
-            StateDictType.FULL_STATE_DICT,
-            FullStateDictConfig(rank0_only=True),
-        ):
-            state_dict = self.model.state_dict()
-            if dist.get_rank() == 0:
-                for k, p in state_dict.items():
-                    # p is a Tensor
-                    print(f"===> full state: rank: {dist.get_rank()} key: {k} param size: {p.size()}")
+    def load(self):
+        if not self.checkpoint_dir.exists():
+            return
 
-    def dump_local_state_dict(self):
-        with FSDP.state_dict_type(self.model, StateDictType.LOCAL_STATE_DICT):
-            state_dict = self.model.state_dict()
-            if dist.get_rank() == 0:
-                total_params = 0
-                for k, p in state_dict.items():
-                    # p is a ShardedTensor
-                    print(f"===> local state rank: {dist.get_rank()} key: {k} param size: {p.size()} shared param size: {p.local_tensor().size()}")
-                    total_params += len(p.local_tensor())
-                print(f"===> local total params == num fsdp shard params: ({total_params}, {count_parameters(self.model)})")
+        with FSDP.state_dict_type(self.model, StateDictType.SHARDED_STATE_DICT):
+            model_state_dict = self.model.state_dict()
+            state_dict = {"model": model_state_dict}
+            dcp.load(
+                state_dict=state_dict,
+                checkpoint_id=self.checkpoint_dir,
+            )
+            self.model.load_state_dict(state_dict["model"])
+            optim_state = load_sharded_optimizer_state_dict(
+                model_state_dict=state_dict["model"],
+                optimizer_key="optim",
+                storage_reader=dcp.FileSystemReader(self.checkpoint_dir),
+                planner=dcp.DefaultLoadPlanner(),
+            )
+            flattened_state = FSDP.optim_state_dict_to_load(
+                self.model, self.optimizer, optim_state["optim"]
+            )
+            self.optimizer.load_state_dict(flattened_state)
+            print_0("==> load checkpoint success")
 
 
 if __name__ == "__main__":

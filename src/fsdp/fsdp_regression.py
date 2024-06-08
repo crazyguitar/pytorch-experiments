@@ -78,6 +78,7 @@ class Trainer:
         return loss
 
     def run_epoch(self, epoch):
+        self.model.train()
         total_loss = torch.zeros(2).to(self.rank)
         for data, target in self.train_dataloader:
             data = data.to(self.rank)
@@ -91,7 +92,6 @@ class Trainer:
             print_0(f"epoch: {epoch}, loss: {total_loss[0] / total_loss[1]}")
 
     def train(self):
-        self.model.train()
         for epoch in range(0, self.epochs + 1):
             self.run_epoch(epoch)
             self.validate(epoch)
