@@ -229,6 +229,10 @@ class Trainer:
             if epoch % 2 == 0:
                 self.save()
 
+        if self.fut:
+            self.fut.result()
+            self.fut = None
+
     def test(self):
         self.model.eval()
         ddp_loss = torch.zeros(3).to(self.device)
