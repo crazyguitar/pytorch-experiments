@@ -294,7 +294,7 @@ if __name__ == "__main__":
 
     torch.manual_seed(5566)
     args = p.parse_args()
-    dist.init_process_group(backend="cpu:gloo,cuda:nccl")
+    dist.init_process_group(backend="nccl")
     torch.cuda.set_device(local_rank)
     trainer = Trainer(args)
 
