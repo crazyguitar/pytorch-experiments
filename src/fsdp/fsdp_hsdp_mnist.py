@@ -221,6 +221,7 @@ class Trainer:
     def save(self):
         shutil.rmtree(self.checkpoint_dir, ignore_errors=True)
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        dist.barrier()
         with FSDP.state_dict_type(self.model, StateDictType.SHARDED_STATE_DICT):
             model_state_dict = self.model.state_dict()
             optim_state_dict = FSDP.optim_state_dict(self.model, self.optimizer)
