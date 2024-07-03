@@ -260,7 +260,7 @@ class Trainer:
 
 
 if __name__ == "__main__":
-    # torchrun --standalone --nproc_per_nod=8 fsdp_mnist.py
+    # torchrun --standalone --nproc_per_nod=8 fsdp_hsdp_mnist.py
     p = argparse.ArgumentParser()
     p.add_argument("--lr", type=float, default=0.01, help="learning rate")
     p.add_argument("--batch-size", type=int, default=64, help="batch size")
